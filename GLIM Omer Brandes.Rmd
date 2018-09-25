@@ -1,0 +1,297 @@
+---
+title: "52542 Generalized Linear Models: Theory and Application - Final Paper"
+author: "Omer Brandes - 302910476"
+date: "March 4, 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(MASS)
+library(boot)
+```
+
+##A brief description of the problem:
+
+We study counts of rat sightings in the city of Madrid.
+The brown rat lives with mankind and adversely affects public health by transmission
+of diseases, bites and allergies. Better understanding behavioural and spatial corre-
+lation aspects of this species can contribute to its effective management and control.
+We explore weakly to moderately correlated covariates based on distances to broken
+sewers, feeding grounds and markets as well as population density.
+The data were collected in Madrid city.
+It has a municipal surface area of about 605 km2 and 3.2 million inhabitants.
+In the context of large urban settlements, approximately 3% of the households have
+rats in their immediate environment, e.g.in compost heaps, gardens or unsecured
+rubbish bins. In the city of Madrid, direct sightings of rats and/or
+cockroaches or signs of their presence (e.g. droppings, burrows, gnaw marks, etc.) can
+be reported by citizens to the Technical Unit for Vector Control (TUVC). Only reports
+from people who declare to have sighted themselves any kind of these pest animals or
+their vital sign(s) in areas falling within the administrative borders of the municipality
+of Madrid are accepted. Records of the location and time of observation are entered in a dedicated database.
+The data used in this study contain the locations and dates of 6693 validated rat
+sightings reported to the TUVC from 1 January 2010 to 31 December 2013.
+[^1]
+
+[^1]: Gräler, Benedikt, Carlos Ayyad, and Jorge Mateu. "Modelling count data based on weakly dependent spatial covariates using a copula approach: application to rat sightings." Environmental and Ecological Statistics 24, no. 3 (2017): 433-448.
+
+
+##Exploratory analysis of the data:
+```{r, echo=FALSE}
+library(readxl)
+rats <- read_excel("rats.xlsx")
+attach(rats)
+vars = colnames(rats)
+```
+
+We have the following variables in the data set:   
+`r vars`
+
+We will not use the id in the analysis since it obviously can't help us predict the response variable. 
+In addition, since 'total.count' is just the sum of 'rat.count' and 'ckr.count', and therefore doesn't add any new information, we will not use it in the analysis as well. 
+Some of the data:   
+
+
+Summary of the variables that will be used in the analysis:     
+```{r echo=FALSE}
+summary(rats[,c(3,4,7:9)])
+```
+
+
+###Exploring each variable:    
+
+The red line in the plots represents the mean value.     
+
+rat.count. We can see in the Histogram below that we have a large number of zeros, we will try to deal with this when we fit the models later on:   
+
+```{r echo=FALSE}
+par(mfrow=c(2,2))
+hist(rat.count, breaks = 25)
+plot(rat.count)
+abline(h = mean(rat.count), col = 'red')
+boxplot(rat.count)
+```
+
+ckr.count:    
+
+```{r echo=FALSE}
+par(mfrow=c(2,2))
+hist(ckr.count, breaks = 18)
+plot(ckr.count)
+abline(h = mean(ckr.count), col = 'red')
+boxplot(ckr.count)
+
+```
+
+market.dist:    
+
+```{r echo=FALSE}
+par(mfrow=c(1,2))
+plot(market.dist)
+abline(h = mean(market.dist), col = 'red')
+boxplot(market.dist)
+```
+
+sewer.dist:   
+
+```{r echo=FALSE}
+par(mfrow=c(1,2))
+plot(sewer.dist)
+abline(h = mean(sewer.dist), col = 'red')
+boxplot(sewer.dist)
+
+```
+
+catfeeding.dist:   
+
+```{r echo=FALSE}
+par(mfrow=c(1,2))
+plot(catfeeding.dist)
+abline(h = mean(catfeeding.dist), col = 'red')
+boxplot(catfeeding.dist)
+
+```
+
+
+we have a few large observations in rat.count, we will try to see if these are outliers that should be
+removed from the dataset. We have three rat.count observation larger than two time the standard deviation
+of rat.count:
+```{r}
+bigCount = which(rat.count > mean(rat.count)+2*sd(rat.count))  
+
+rats[bigCount,-c(2,5,6)]
+```
+
+We expect the above observation to have below average distance from markets and sewers, but we first need to figure out wether cat feeding stations encourage rats or not:
+
+```{r echo=FALSE}
+plot(catfeeding.dist,rat.count)
+```
+
+We can see that the negative trend in the above plot suggests that cat feeding stations encourage rats. 
+Therefore, we expect that the possible outliers will also have below average cat feeding distance.  
+
+The possible outliers are marked with full red dots, the red horizontal line represents the mean value of the variable:
+
+```{r echo=FALSE}
+par(mfrow = c(2,2))
+plot(market.dist)
+points(c(20,21,43) ,market.dist[c(20,21,43)], col = 'red', pch = 16)
+abline(h = mean(market.dist), col = 'red')
+
+plot(sewer.dist)
+points(c(20,21,43) ,sewer.dist[c(20,21,43)], col = 'red', pch = 16)
+abline(h = mean(sewer.dist), col = 'red')
+
+plot(catfeeding.dist)
+points(c(20,21,43) ,catfeeding.dist[c(20,21,43)], col = 'red', pch = 16)
+abline(h = mean(catfeeding.dist), col = 'red')
+```
+
+And we can see that the outliers are below average on all three variables, and therefore seems like we should
+keep them in the dataset.   
+
+
+plotting some graphs for further visualisation:
+
+```{r echo=FALSE}
+par(mfcol = c(2,2))
+plot(catfeeding.dist,rat.count)
+plot(market.dist,rat.count)
+plot(ckr.count,rat.count)
+```
+
+
+```{r echo=FALSE}
+par(mfrow = c(1,1))
+pairs(cbind(rats[vars[c(3,4,7:9)]])) 
+```
+
+Covariance matrix - most are very low, with some excpeitons like rat.count/ckr.count and total.count, but that is expected:
+```{r echo=FALSE}
+cor(rats[vars[1:9]])
+```
+
+
+  
+##Model fitting:
+We will start by fitting a Linear Model to the dataset. Since our response variable (rat.count) is a count variable, we don't expect the LM to fit well:
+```{r}
+reg1 = lm(rat.count ~ ckr.count + market.dist + sewer.dist + catfeeding.dist)
+reg1_summary = summary(reg1)
+reg1_summary
+```
+
+And indeed the model shows a very low R-squared value: `r reg1_summary$r.squared`.    
+
+Next, we will try to fit a poisson model:
+
+```{r}
+glim1 = glm(rat.count ~ ckr.count + market.dist + sewer.dist + catfeeding.dist,      
+            family = "poisson", data = rats)
+summary(glim1)
+```
+
+We now attempt to add spatial variables to the model and see if there is a spatial trend, 
+we fit a few models with different spatial variables such as x,y,x^2 ,y^2 , and compare their AIC and Devience:
+```{r echo=FALSE}
+glimSpatial1 = glm(rat.count ~ ckr.count + market.dist + sewer.dist + catfeeding.dist
+                   +xc , family = "poisson", data = rats)
+glimSpatial2 = glm(rat.count ~ ckr.count + market.dist + sewer.dist + catfeeding.dist
+                   +yc , family = "poisson", data = rats)
+glimSpatial3 = glm(rat.count ~ ckr.count + market.dist + sewer.dist + catfeeding.dist
+                   +xc + yc , family = "poisson", data = rats)
+glimSpatial4 = glm(rat.count ~ ckr.count + market.dist + sewer.dist + catfeeding.dist
+                   +xc + yc + xc^2 + yc^2, family = "poisson", data = rats)
+```
+```{r}
+cbind(glimSpatial1$aic, glimSpatial2$aic,glimSpatial3$aic,glimSpatial4$aic)
+cbind(glimSpatial1$deviance, glimSpatial2$deviance,glimSpatial3$deviance,glimSpatial4$deviance)
+```
+
+And finally, we compare the models with and without the sptial data:
+```{r}
+cbind(glimSpatial1$aic, glim1$aic)
+cbind(glimSpatial1$deviance, glim1$deviance)
+```
+
+We will evaluate the poisson model with the spatial data using the Goodnes of Fit test:
+The GOF test indicates that the Poisson model doesn't fit the data (p < 0.05).
+```{r}
+1 - pchisq(summary(glimSpatial1)$deviance, summary(glimSpatial1)$df.residual)
+```
+
+This is expected because it seems like we have over-dispersion - the variance is much larger than the Expected Value (using the mean as an estimate to the Expected Value):
+```{r}
+mean(rat.count)
+var(rat.count)
+```
+
+In addition, we need to find a model that accounts for the zero inflation we noted earlier.   
+
+Negative-Binomial model:
+```{r}
+glimNB = glm.nb(rat.count ~ ckr.count + market.dist + sewer.dist + catfeeding.dist, 
+                data = rats)
+```
+this model leads to an AIC of glimNB$aic.
+The devience is: `r glimNB$deviance`
+The Residual Sum of Squares: `r sum((rat.count - glimNB$fitted.values)^2)`
+
+```{r}
+glimNB_spatial = glm.nb(rat.count ~ ckr.count + market.dist + sewer.dist + catfeeding.dist + xc, 
+                        data = rats)
+```
+Adding the spatial data of the x coordinates yields AIC glimNB_spatial$aic.
+Devience: glimNB_spatial$deviance.
+The Residual Sum of Squares is better: `r sum((rat.count - glimNB_spatial$fitted.values)^2)`
+   
+So far NB model with spatial data gives the best aic and devience. 
+```{r}
+rbind((cbind(glimNB$aic,glimNB$deviance)),
+      (cbind(glimNB_spatial$aic,glimNB_spatial$deviance )))
+```
+
+Goodness of fit for NB models.
+The GOF test indicates that the Poisson model fits the data (p > 0.05).
+
+```{r}
+1 - pchisq(summary(glimNB_spatial)$deviance, 
+           summary(glimNB_spatial)$df.residual)
+```
+
+
+Now we attempt to improve the model using a stepwise process:
+```{r}
+step(glimNB_spatial,direction="both")
+```
+Seems like we can remove the catfeeding.dist variable.
+
+
+
+```{r}
+glimNB_spatial_2 = glm.nb(rat.count ~ ckr.count + market.dist + sewer.dist + xc, 
+                        data = rats)
+
+```
+
+Goodness of fit improved: `r 1 - pchisq(summary(glimNB_spatial_2)$deviance,summary(glimNB_spatial_2)$df.residual)`
+  
+AIC: `r glimNB_spatial_2$aic`
+Devience: `r glimNB_spatial_2$deviance`
+Residual sum of squares: `r sum((rat.count - glimNB_spatial_2$fitted.values)^2)`
+
+   
+    
+In conclusion, we fitted the Negative-Binomial model to the data, and improved it using a stepwise process.
+The graph below shows the response variable (black empty dots) and the fitted valued (red full dots):
+
+```{r}
+par(mfrow = c(1,1))
+plot(rat.count)
+points(glimNB_spatial_2$fitted.values,col='red', pch = 19)
+```
+
+
+
+
